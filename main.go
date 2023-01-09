@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
+
+var lastRequestTime *time.Time
 
 var UrbanDictionaryEndpoints = map[string]string{
 	"defineTerm": "http://api.urbandictionary.com/v0/define?term=",
@@ -74,8 +77,23 @@ func (res *UrbanDictionaryResponse) FilterMaxNDefinitions(n int) {
 	res.List = res.List[:n]
 }
 
-func SearchTerm(term string) (*UrbanDictionaryResponse, error) {
-	resp, err := http.Get(UrbanDictionaryEndpoints["defineTerm"] + term)
+func callUrbanDictionaryAPI(url string) (*UrbanDictionaryResponse, error) {
+	shouldCallAPI := true
+
+	if lastRequestTime == nil {
+		lastRequestTime = new(time.Time)
+		*lastRequestTime = time.Now()
+	} else if time.Since(*lastRequestTime) < 1*time.Second {
+		shouldCallAPI = false
+	} else {
+		*lastRequestTime = time.Now()
+	}
+
+	if !shouldCallAPI {
+		return nil, fmt.Errorf("Don't call the API too fast! Wait at least 1 second between requests.")
+	}
+
+	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -87,6 +105,20 @@ func SearchTerm(term string) (*UrbanDictionaryResponse, error) {
 		}
 	}()
 
+	// Handle 4xx and 5xx codes, allowing to add custom error handling for specific codes in the future
+	switch sc := resp.StatusCode; {
+	case sc >= 500:
+		switch sc {
+		default:
+			return nil, fmt.Errorf("Server error: %d", sc)
+		}
+	case sc >= 400:
+		switch sc {
+		default:
+			return nil, fmt.Errorf("Client error: %d", sc)
+		}
+	}
+
 	var res UrbanDictionaryResponse
 	jsonDec := json.NewDecoder(resp.Body)
 	err = jsonDec.Decode(&res)
@@ -95,4 +127,16 @@ func SearchTerm(term string) (*UrbanDictionaryResponse, error) {
 	}
 
 	return &res, nil
+}
+
+func SearchTerm(term string) (*UrbanDictionaryResponse, error) {
+	return callUrbanDictionaryAPI(UrbanDictionaryEndpoints["defineTerm"] + term)
+}
+
+func SearchTermId(id int) (*UrbanDictionaryResponse, error) {
+	return callUrbanDictionaryAPI(UrbanDictionaryEndpoints["defineId"] + fmt.Sprint(id))
+}
+
+func SearchRandom() (*UrbanDictionaryResponse, error) {
+	return callUrbanDictionaryAPI(UrbanDictionaryEndpoints["random"])
 }
